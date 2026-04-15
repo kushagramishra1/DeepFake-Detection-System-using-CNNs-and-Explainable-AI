@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 
+// DeepFake Detection System - AI-powered detection using CNNs and Explainable AI
 function App() {
   const [image, setImage] = useState(null)
   const [preview, setPreview] = useState(null)
