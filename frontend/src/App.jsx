@@ -9,6 +9,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
   const handleImageChange = (e) => {
     console.log('File input changed:', e.target.files)
     const file = e.target.files[0]
@@ -43,7 +45,7 @@ function App() {
 
     console.log('Sending request to backend...')
     try {
-      const response = await fetch('http://localhost:5000/predict', {
+      const response = await fetch(`${API_URL}/predict`, {
         method: 'POST',
         body: formData,
         headers: {
@@ -63,7 +65,7 @@ function App() {
       }
     } catch (error) {
       console.error('Fetch error:', error)
-      setError(`Failed to connect to backend: ${error.message}. Make sure the server is running on http://localhost:5000`)
+      setError(`Failed to connect to backend: ${error.message}. Make sure the server is running on ${API_URL}`)
     }
     setLoading(false)
   }
