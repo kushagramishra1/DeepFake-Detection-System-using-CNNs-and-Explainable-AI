@@ -36,3 +36,4 @@ yarn-error.log*
 
 # Logs
 *.log
+frontend/dist/
