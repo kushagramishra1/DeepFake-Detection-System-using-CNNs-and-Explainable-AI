@@ -39,7 +39,7 @@ const ResultPanel = ({ prediction, confidence, explanation }) => {
 
         <div>
           <h4 className="text-lg font-semibold text-foreground mb-2">
-            Model Explanation (XAI - Grad-CAM):
+            Model Explanation (Occlusion Sensitivity):
           </h4>
           <p className="text-gray-300 leading-relaxed">{explanation}</p>
         </div>

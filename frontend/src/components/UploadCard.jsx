@@ -45,10 +45,10 @@ const UploadCard = ({ onFileSelect, selectedFile }) => {
     >
       <div className="text-center mb-6">
         <h2 className="text-2xl font-bold text-foreground mb-2">
-          Deepfake Detection & Explainable AI (Grad-CAM)
+          Deepfake Detection & Explainable AI
         </h2>
         <p className="text-gray-400">
-          Upload an image to detect deepfakes and visualize the model's decision using Grad-CAM.
+          Upload an image to detect deepfakes and visualize regions that influence the model's decision.
         </p>
       </div>
 

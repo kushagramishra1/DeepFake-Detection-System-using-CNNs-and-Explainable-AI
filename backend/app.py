@@ -1,127 +1,110 @@
-from flask import Flask, request, jsonify
-import tensorflow as tf
-from PIL import Image
-import numpy as np
-import cv2
-import os
 import base64
+import os
 from io import BytesIO
+
+import numpy as np
+import onnxruntime as ort
+from flask import Flask, jsonify, request
+from PIL import Image
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 4 * 1024 * 1024
 
-# Configuration
 IMG_SIZE = (128, 128)
+GRID_SIZE = 8
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "deepfake_detection_model.h5")
+MODEL_PATH = os.path.join(BASE_DIR, "deepfake_detection_model.onnx")
 
-# Load the model
-print("Loading model...")
-model = tf.keras.models.load_model(MODEL_PATH, compile=False)
-print("Model loaded successfully.")
+session = ort.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+INPUT_NAME = session.get_inputs()[0].name
+OUTPUT_NAME = session.get_outputs()[0].name
 
-# Try to find a valid last conv layer name for Grad-CAM
-LAST_CONV_LAYER_NAME = None
-for layer in reversed(model.layers):
-    if isinstance(layer, tf.keras.layers.Conv2D):
-        LAST_CONV_LAYER_NAME = layer.name
-        break
-if LAST_CONV_LAYER_NAME is None:
-    LAST_CONV_LAYER_NAME = "conv3"  # fallback
-print(f"🔍 Using Grad-CAM layer: {LAST_CONV_LAYER_NAME}")
 
-# Grad-CAM function
-def get_gradcam_heatmap(img_array, model, last_conv_layer_name="conv3"):
-    grad_model = tf.keras.models.Model(
-        [model.inputs], [model.get_layer(last_conv_layer_name).output, model.output]
+def preprocess_image(image_bytes):
+    image = Image.open(BytesIO(image_bytes)).convert("RGB").resize(IMG_SIZE)
+    image_array = np.asarray(image, dtype=np.float32) / 255.0
+    return image, image_array[np.newaxis, ...]
+
+
+def get_occlusion_heatmap(image, image_array, original_score):
+    patch_size = IMG_SIZE[0] // GRID_SIZE
+    occluded_images = np.repeat(image_array, GRID_SIZE * GRID_SIZE, axis=0)
+    fill_color = image_array.mean(axis=(1, 2), keepdims=True)[0, 0, 0]
+
+    patch_index = 0
+    for row in range(GRID_SIZE):
+        for column in range(GRID_SIZE):
+            top = row * patch_size
+            left = column * patch_size
+            occluded_images[patch_index, top:top + patch_size, left:left + patch_size] = fill_color
+            patch_index += 1
+
+    occluded_scores = session.run([OUTPUT_NAME], {INPUT_NAME: occluded_images})[0].reshape(GRID_SIZE, GRID_SIZE)
+    heatmap = np.abs(original_score - occluded_scores)
+    maximum = float(heatmap.max())
+    if maximum > 0:
+        heatmap /= maximum
+
+    heatmap_image = Image.fromarray(np.uint8(heatmap * 255), mode="L").resize(
+        IMG_SIZE, Image.Resampling.BILINEAR
     )
+    heat = np.asarray(heatmap_image, dtype=np.float32) / 255.0
+    colors = np.stack(
+        [
+            np.clip(1.5 * heat, 0, 1),
+            np.clip(1.5 - np.abs(2 * heat - 1) * 1.5, 0, 1),
+            np.clip(1.5 * (1 - heat), 0, 1),
+        ],
+        axis=-1,
+    )
+    original = np.asarray(image, dtype=np.float32) / 255.0
+    overlay = np.uint8(np.clip((original * 0.6 + colors * 0.4) * 255, 0, 255))
 
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
-        loss = predictions[:, 0]
+    image_buffer = BytesIO()
+    Image.fromarray(overlay).save(image_buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(image_buffer.getvalue()).decode("ascii")
 
-    grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    conv_outputs = conv_outputs[0]
-
-    heatmap = tf.reduce_mean(tf.multiply(pooled_grads, conv_outputs), axis=-1)
-    heatmap = np.maximum(heatmap, 0)
-    heatmap /= np.max(heatmap) + 1e-8
-    return np.uint8(255 * heatmap)
-
-def preprocess_image(image, target_size=IMG_SIZE):
-    """Convert an uploaded image to a normalized model input array."""
-    img = Image.open(image).convert('RGB')
-    img = img.resize(target_size)
-    img_array = np.array(img, dtype=np.float32) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-    return img_array
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
 
-    file = request.files['file']
-    if file.filename == '':
+    uploaded_file = request.files['file']
+    if not uploaded_file.filename:
         return jsonify({'error': 'No file selected'}), 400
+    if not uploaded_file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+        return jsonify({'error': 'Invalid file type'}), 400
 
-    if file and file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-        try:
-            image_bytes = file.read()
-            img_array = preprocess_image(BytesIO(image_bytes))
+    try:
+        image_bytes = uploaded_file.read()
+        image, image_array = preprocess_image(image_bytes)
+        prediction_score = float(session.run([OUTPUT_NAME], {INPUT_NAME: image_array})[0].squeeze())
+        prediction = "Real" if prediction_score > 0.5 else "Fake"
+        heatmap_image = get_occlusion_heatmap(image, image_array, prediction_score)
+        explanation = (
+            "The model detected this image as REAL. "
+            "The overlay highlights regions that most influence the model's prediction."
+            if prediction == "Real"
+            else "The model detected this image as FAKE. "
+            "The overlay highlights regions that most influence the model's prediction."
+        )
 
-            # Predict
-            preds = model.predict(img_array, verbose=0)
-            pred_value = float(preds.squeeze())
-            prediction = "Real" if pred_value > 0.5 else "Fake"
+        return jsonify({
+            'prediction': prediction,
+            'confidence': prediction_score,
+            'heatmap_image': heatmap_image,
+            'explanation': explanation,
+        })
+    except Exception as error:
+        app.logger.exception("Image prediction failed")
+        return jsonify({'error': str(error)}), 500
 
-            # Generate Grad-CAM heatmap
-            heatmap = get_gradcam_heatmap(img_array, model, last_conv_layer_name=LAST_CONV_LAYER_NAME)
-            heatmap = cv2.resize(heatmap, IMG_SIZE)
-            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-
-            # Create overlay
-            original = cv2.cvtColor(
-                np.array(Image.open(BytesIO(image_bytes)).convert('RGB').resize(IMG_SIZE)),
-                cv2.COLOR_RGB2BGR,
-            )
-            overlay = cv2.addWeighted(original, 0.6, heatmap, 0.4, 0)
-
-            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-            image_buffer = BytesIO()
-            Image.fromarray(overlay_rgb).save(image_buffer, format='PNG')
-            heatmap_data_url = 'data:image/png;base64,' + base64.b64encode(image_buffer.getvalue()).decode('ascii')
-
-            # Generate explanation
-            if prediction == "Real":
-                explanation = (
-                    "The model detected this image as REAL. "
-                    "Grad-CAM shows strong activation in natural facial areas (eyes, nose, mouth), "
-                    "indicating real textures and consistent lighting."
-                )
-            else:
-                explanation = (
-                    "The model detected this image as FAKE. "
-                    "Grad-CAM highlights unusual patterns or inconsistencies (like blurred patches or unnatural lighting) "
-                    "that often appear in deepfakes."
-                )
-
-            return jsonify({
-                'prediction': prediction,
-                'confidence': pred_value,
-                'heatmap_image': heatmap_data_url,
-                'explanation': explanation
-            })
-
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
-    return jsonify({'error': 'Invalid file type'}), 400
 
 @app.errorhandler(413)
 def request_too_large(_error):
     return jsonify({'error': 'Image uploads must be 4 MiB or smaller.'}), 413
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

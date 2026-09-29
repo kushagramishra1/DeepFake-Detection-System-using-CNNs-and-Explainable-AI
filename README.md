@@ -1,18 +1,19 @@
 # DeepFake Detection System Using CNNs and Explainable AI
 
-A web application for classifying an image as real or fake with a CNN and visualizing the model's image regions of interest with Grad-CAM.
+A web application for classifying an image as real or fake with a CNN and visualizing influential image regions using occlusion sensitivity.
 
 ## Project Structure
 
-- `backend/`: Flask API, image preprocessing/inference code, and the trained model used by the Vercel backend service.
+- `backend/`: Flask API, ONNX inference model, and image preprocessing/inference code.
 - `frontend/`: React interface for uploading images and viewing predictions.
+- `deepfake_detection_model.h5`: original trained Keras model used to export the ONNX model.
 - `Dataset/`: training, validation, and test image folders.
 
 ## Requirements
 
-- Python 3.12 for the backend (TensorFlow CPU 2.16.2).
+- Python 3.12 for the backend (ONNX Runtime).
 - Node.js and npm.
-- The trained model file at `backend/deepfake_detection_model.h5`.
+- The ONNX model file at `backend/deepfake_detection_model.onnx`.
 
 ## Run Locally
 
@@ -39,6 +40,6 @@ The React app runs at `http://localhost:3000` and sends image predictions to the
 
 ## API
 
-- `POST /api/predict`: Upload an image using the multipart form field `file`. Supported by the backend: PNG, JPG, JPEG, BMP, and TIFF. Returns the prediction, confidence, Grad-CAM image data URL, and explanation. Uploads are limited to 4 MiB for serverless compatibility.
+- `POST /api/predict`: Upload an image using the multipart form field `file`. Supported by the backend: PNG, JPG, JPEG, BMP, and TIFF. Returns the prediction, confidence, occlusion-sensitivity overlay data URL, and explanation. Uploads are limited to 4 MiB for serverless compatibility.
 
 The frontend currently accepts JPG, JPEG, and PNG uploads.
