@@ -20,6 +20,20 @@ INPUT_NAME = session.get_inputs()[0].name
 OUTPUT_NAME = session.get_outputs()[0].name
 
 
+@app.get("/")
+def index():
+    return jsonify({
+        "service": "deepfake-detection-backend",
+        "status": "ok",
+        "health": "/api/health",
+    })
+
+
+@app.get("/api/health")
+def health():
+    return jsonify({"status": "ok", "model": "onnx"})
+
+
 def preprocess_image(image_bytes):
     image = Image.open(BytesIO(image_bytes)).convert("RGB").resize(IMG_SIZE)
     image_array = np.asarray(image, dtype=np.float32) / 255.0

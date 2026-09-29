@@ -41,7 +41,8 @@ const Home = () => {
       setHeatmapImage(response.data.heatmap_image);
 
     } catch (err) {
-      setError('Failed to process the image. Please try again.');
+      const apiMessage = err.response?.data?.error;
+      setError(apiMessage || `Failed to process the image${err.message ? `: ${err.message}` : '.'}`);
       console.error('API Error:', err);
     } finally {
       setIsLoading(false);
