@@ -1,48 +1,29 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify
 import tensorflow as tf
-import keras
 from PIL import Image
 import numpy as np
 import cv2
 import os
-from werkzeug.utils import secure_filename
-import uuid
+import base64
+from io import BytesIO
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+app.config['MAX_CONTENT_LENGTH'] = 4 * 1024 * 1024
 
 # Configuration
 IMG_SIZE = (128, 128)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "..", "deepfake_detection_model.h5")
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-OUTPUT_FOLDER = os.path.join(BASE_DIR, "outputs")
-
-# Create directories if they don't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+MODEL_PATH = os.path.join(BASE_DIR, "deepfake_detection_model.h5")
 
 # Load the model
-print("📦 Loading model...")
-try:
-    # Try loading with standalone keras (Keras 3)
-    model = keras.saving.load_model(MODEL_PATH)
-    print("✅ Model loaded successfully with Keras 3!")
-except Exception as e1:
-    print(f"Keras 3 load failed: {e1}")
-    try:
-        # Fallback to tf.keras
-        model = tf.keras.models.load_model(MODEL_PATH)
-        print("✅ Model loaded successfully with tf.keras!")
-    except Exception as e2:
-        print(f"tf.keras load failed: {e2}")
-        raise
+print("Loading model...")
+model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+print("Model loaded successfully.")
 
 # Try to find a valid last conv layer name for Grad-CAM
 LAST_CONV_LAYER_NAME = None
 for layer in reversed(model.layers):
-    if isinstance(layer, (keras.layers.Conv2D, tf.keras.layers.Conv2D)):
+    if isinstance(layer, tf.keras.layers.Conv2D):
         LAST_CONV_LAYER_NAME = layer.name
         break
 if LAST_CONV_LAYER_NAME is None:
@@ -68,15 +49,15 @@ def get_gradcam_heatmap(img_array, model, last_conv_layer_name="conv3"):
     heatmap /= np.max(heatmap) + 1e-8
     return np.uint8(255 * heatmap)
 
-def preprocess_image(image_path, target_size=IMG_SIZE):
-    """Load and preprocess image using PIL"""
-    img = Image.open(image_path).convert('RGB')
+def preprocess_image(image, target_size=IMG_SIZE):
+    """Convert an uploaded image to a normalized model input array."""
+    img = Image.open(image).convert('RGB')
     img = img.resize(target_size)
     img_array = np.array(img, dtype=np.float32) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
-@app.route('/predict', methods=['POST'])
+@app.route('/api/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -86,15 +67,9 @@ def predict():
         return jsonify({'error': 'No file selected'}), 400
 
     if file and file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
-        # Save uploaded file
-        filename = secure_filename(file.filename)
-        unique_id = str(uuid.uuid4())
-        upload_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_{filename}")
-        file.save(upload_path)
-
         try:
-            # Process image
-            img_array = preprocess_image(upload_path)
+            image_bytes = file.read()
+            img_array = preprocess_image(BytesIO(image_bytes))
 
             # Predict
             preds = model.predict(img_array, verbose=0)
@@ -107,14 +82,16 @@ def predict():
             heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
             # Create overlay
-            original = cv2.imread(upload_path)
-            original = cv2.resize(original, IMG_SIZE)
+            original = cv2.cvtColor(
+                np.array(Image.open(BytesIO(image_bytes)).convert('RGB').resize(IMG_SIZE)),
+                cv2.COLOR_RGB2BGR,
+            )
             overlay = cv2.addWeighted(original, 0.6, heatmap, 0.4, 0)
 
-            # Save heatmap image
-            heatmap_filename = f"{unique_id}_heatmap.png"
-            heatmap_path = os.path.join(OUTPUT_FOLDER, heatmap_filename)
-            cv2.imwrite(heatmap_path, overlay)
+            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+            image_buffer = BytesIO()
+            Image.fromarray(overlay_rgb).save(image_buffer, format='PNG')
+            heatmap_data_url = 'data:image/png;base64,' + base64.b64encode(image_buffer.getvalue()).decode('ascii')
 
             # Generate explanation
             if prediction == "Real":
@@ -130,33 +107,21 @@ def predict():
                     "that often appear in deepfakes."
                 )
 
-            # Clean up uploaded file
-            os.remove(upload_path)
-
             return jsonify({
                 'prediction': prediction,
                 'confidence': pred_value,
-                'heatmap_path': heatmap_filename,
+                'heatmap_image': heatmap_data_url,
                 'explanation': explanation
             })
 
         except Exception as e:
-            # Clean up on error
-            if os.path.exists(upload_path):
-                os.remove(upload_path)
             return jsonify({'error': str(e)}), 500
 
     return jsonify({'error': 'Invalid file type'}), 400
 
-@app.route('/heatmap/<filename>', methods=['GET'])
-def get_heatmap(filename):
-    filepath = os.path.join(OUTPUT_FOLDER, filename)
-    print(f"Looking for file: {filepath}")  # Debug log
-    if os.path.exists(filepath):
-        print(f"File found: {filepath}")  # Debug log
-        return send_file(filepath, mimetype='image/png')
-    print(f"File not found: {filepath}")  # Debug log
-    return jsonify({'error': 'File not found'}), 404
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({'error': 'Image uploads must be 4 MiB or smaller.'}), 413
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

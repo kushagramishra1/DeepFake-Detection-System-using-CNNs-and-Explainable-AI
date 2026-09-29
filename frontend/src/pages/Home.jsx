@@ -35,16 +35,10 @@ const Home = () => {
       formData.append('file', selectedFile);
 
       // Real API call to Flask backend
-      const response = await axios.post('http://localhost:5000/predict', formData);
+      const response = await axios.post('/api/predict', formData);
 
       setResults(response.data);
-
-      // Fetch heatmap image
-      const heatmapResponse = await axios.get(`http://localhost:5000/heatmap/${response.data.heatmap_path}`, {
-        responseType: 'blob'
-      });
-      const heatmapUrl = URL.createObjectURL(heatmapResponse.data);
-      setHeatmapImage(heatmapUrl);
+      setHeatmapImage(response.data.heatmap_image);
 
     } catch (err) {
       setError('Failed to process the image. Please try again.');

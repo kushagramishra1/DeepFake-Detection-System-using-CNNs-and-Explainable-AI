@@ -4,16 +4,15 @@ A web application for classifying an image as real or fake with a CNN and visual
 
 ## Project Structure
 
-- `backend/`: Flask API and image preprocessing/inference code.
+- `backend/`: Flask API, image preprocessing/inference code, and the trained model used by the Vercel backend service.
 - `frontend/`: React interface for uploading images and viewing predictions.
-- `deepfake_detection_model.h5`: trained model loaded by the backend.
 - `Dataset/`: training, validation, and test image folders.
 
 ## Requirements
 
-- Python 3.9 or compatible with the pinned TensorFlow dependencies.
+- Python 3.12 for the backend (TensorFlow CPU 2.16.2).
 - Node.js and npm.
-- The trained model file at the project root: `deepfake_detection_model.h5`.
+- The trained model file at `backend/deepfake_detection_model.h5`.
 
 ## Run Locally
 
@@ -40,7 +39,6 @@ The React app runs at `http://localhost:3000` and sends image predictions to the
 
 ## API
 
-- `POST /predict`: Upload an image using the multipart form field `file`. Supported by the backend: PNG, JPG, JPEG, BMP, and TIFF. Returns the prediction, confidence, Grad-CAM heatmap filename, and explanation.
-- `GET /heatmap/<filename>`: Retrieve the generated Grad-CAM overlay.
+- `POST /api/predict`: Upload an image using the multipart form field `file`. Supported by the backend: PNG, JPG, JPEG, BMP, and TIFF. Returns the prediction, confidence, Grad-CAM image data URL, and explanation. Uploads are limited to 4 MiB for serverless compatibility.
 
 The frontend currently accepts JPG, JPEG, and PNG uploads.
